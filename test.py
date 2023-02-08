@@ -2,7 +2,7 @@ from streamer import Streamer
 import sys
 import lossy_socket
 
-NUMS=1000
+NUMS=100
 
 
 def receive(s):
@@ -33,8 +33,8 @@ def receive(s):
 def host1(listen_port, remote_port):
     s = Streamer(dst_ip="localhost", dst_port=remote_port,
                  src_ip="localhost", src_port=listen_port)
-    # receive(s)
-    # print("STAGE 1 TEST PASSED!")
+    receive(s)
+    print("STAGE 1 TEST PASSED!")
     # send large chunks of data
     i = 0
     buf = ""
@@ -53,17 +53,17 @@ def host2(listen_port, remote_port):
     s = Streamer(dst_ip="localhost", dst_port=remote_port,
                  src_ip="localhost", src_port=listen_port)
     # send small pieces of data
-    # for i in range(NUMS):
-    #     buf = ("%d " % i)
-    #     print("sending {%s}" % buf)
-    #     s.send(buf.encode('utf-8'))
+    for i in range(NUMS):
+        buf = ("%d " % i)
+        print("sending {%s}" % buf)
+        s.send(buf.encode('utf-8'))
     receive(s)
     s.close()
     print("STAGE 2 TEST PASSED!")
 
 
 def main():
-    lossy_socket.sim = lossy_socket.SimulationParams(loss_rate=0.0, corruption_rate=0.0,
+    lossy_socket.sim = lossy_socket.SimulationParams(loss_rate=0.1, corruption_rate=0.0,
                                                      max_delivery_delay=0.1,
                                                      become_reliable_after=100000.0)
 

@@ -25,10 +25,45 @@ class Streamer:
         executer = ThreadPoolExecutor(max_workers = 1)
         executer.submit(self.listener)
 
+    def indiv_send(self, chunk: bytes, ack: bool):
+        if not ack:
+            self.sequence_number += 1
+        header = struct.pack('!II', self.sequence_number, int(ack))
+
+        if ack:
+            print('Sending an ACK...')
+            print()
+            self.socket.sendto(header, (self.dst_ip, self.dst_port))
+
+        
+        else:
+            sent = False
+            self.ack = 0
+            packet = header + chunk
+            while not sent:
+                t = 0
+                print('\nSENDING CHUNK:', chunk)
+                print('WITH SEQ NUM:', self.sequence_number)
+                print('AND ACK: 0')
+                print()
+                self.socket.sendto(packet, (self.dst_ip, self.dst_port))
+                while not self.ack and t <= 25:
+                    time.sleep(0.01)
+                    t += 1
+
+                sent = self.ack
+
+
+
+
+
+
+
     def send(self, data_bytes: bytes) -> None:
         """Note that data_bytes can be larger than one packet."""
 
         MAX_PAYLOAD_LENGTH = 1472
+
 
         # Fake header to get header size
         header = struct.pack('!II', self.sequence_number, self.ack)
@@ -41,36 +76,41 @@ class Streamer:
 
         # Send each chunk at a time
         for chunk in chunks:
-            self.sequence_number += 1
 
-            header = struct.pack('!II', self.sequence_number, self.ack)
+            # send chunk
+            self.indiv_send(chunk, False)
 
-            if self.ack:
-                self.sequence_number -= 1
 
-            # add ack header
+            # self.sequence_number += 1
 
-            # If ACK, only send header
-            if self.ack:
-                print('Sending an ACK...')
-                print()
-                packet = header
-            else:
-                packet = header + chunk
-                print('\nSENDING CHUNK:', chunk)
-                print('WITH SEQ NUM:', self.sequence_number)
-                print('AND SELF ACK:', self.ack)
-                print()
+            # header = struct.pack('!II', self.sequence_number, self.ack)
 
-            # Send packet back to sender
-            self.socket.sendto(packet, (self.dst_ip, self.dst_port))
+            # if self.ack:
+            #     self.sequence_number -= 1
 
-            # Stop and wait until ACK is received
-            while not self.ack:
-                time.sleep(0.01)
+            # # add ack header
 
-            # Since an ACK was received, the
-            self.ack = 0
+            # # If ACK, only send header
+            # if self.ack:
+            #     print('Sending an ACK...')
+            #     print()
+            #     packet = header
+            # else:
+            #     packet = header + chunk
+            #     print('\nSENDING CHUNK:', chunk)
+            #     print('WITH SEQ NUM:', self.sequence_number)
+            #     print('AND SELF ACK:', self.ack)
+            #     print()
+
+            # # Send packet back to sender
+            # self.socket.sendto(packet, (self.dst_ip, self.dst_port))
+
+            # # Stop and wait until ACK is received
+            # while not self.ack:
+            #     time.sleep(0.01)
+
+            # # Since an ACK was received, the
+            # self.ack = 0
 
     def recv(self) -> bytes:
         """Blocks (waits) if no data is ready to be read from the connection."""
@@ -108,7 +148,8 @@ class Streamer:
 
                 # If an ACK is received, tell the object to break out of the
                 # while sleep loop
-                self.ack = ack
+                if ack:
+                    self.ack = ack
 
                 # If the incoming packet's ACK flag is not set
                 if not ack:
@@ -127,8 +168,8 @@ class Streamer:
                     print('BUFFER:', str(list(self.receive_buffer.keys())))
 
                     # Send an ACK packet back
-                    self.ack = 1
-                    self.send(data)
+                    # self.ack = 1
+                    self.indiv_send(data, True)
 
             except Exception as e:
                 print("listener died!")
