@@ -2,6 +2,7 @@ import struct
 from concurrent.futures import ThreadPoolExecutor
 import time
 import hashlib
+from threading import Lock
 
 # do not import anything else from loss_socket besides LossyUDP
 from lossy_socket import LossyUDP
@@ -20,6 +21,9 @@ class Streamer:
         self.dst_port = dst_port
         self.sequence_number = 0
         self.receive_buffer = {}
+
+        # Lock
+        self.lock = Lock()
 
         # Receive buffer
         self.received_packets = []
@@ -74,14 +78,13 @@ class Streamer:
         # it is already packed up how we want it,
         # chunk is the whole packet, header and data and hash
         if buffer:
-            print('\nSENDING CHUNK FROM BUFFER:', chunk[6:])
-            print('WITH SEQ NUM:',struct.unpack('!I??', chunk[:6])[0])
+            seq_num = struct.unpack('!I??', chunk[:6])[0]
+            print('\nSENDING CHUNK FROM BUFFER')
+            print('WITH SEQ NUM:', seq_num)
             self.socket.sendto(chunk, (self.dst_ip, self.dst_port))
 
             # add sent packet to send buffer
-            # not sure if we need to do this again, depends on where data corruption is happening
-            self.send_buffer[struct.unpack('!I??', chunk[:6])[0]] = chunk
-
+            self.send_buffer[seq_num] = chunk
 
         # we are receiving data from send function (so from test.py)
         # or we are receiving data from the listener, meaning its an ack
@@ -89,11 +92,9 @@ class Streamer:
 
             #chunk is seq number in the case of acks
             if ack:
-                print("sending ACK SEQ NUM:", chunk)
-                print()
+                print("sending ACK SEQ NUM:", chunk, "\n")
                 header = struct.pack('!I??', chunk, ack, fin)
                 self.socket.sendto(header, (self.dst_ip, self.dst_port))
-
 
             # ABOVE KEEP THE SAME
 
@@ -105,12 +106,12 @@ class Streamer:
                 self.sequence_number += 1
                 header = struct.pack('!I??', self.sequence_number, ack, fin)
 
-                #create the hash
+                # create the hash for corruption
                 hash = hashlib.md5(header+chunk).digest()
 
                 packet = header + chunk + hash
 
-                # # while we haven't recieved an ACK
+                ### STOP & WAIT ###
                 # while not sent:
                 #     t = 0
                 #     print('\nSENDING CHUNK:', chunk)
@@ -131,7 +132,7 @@ class Streamer:
                 #     # to send the packet again
                 #     sent = self.ack
 
-                print('SENDING CHUNK:', chunk)
+                print('SENDING CHUNK')
                 print('WITH SEQ NUM:', self.sequence_number)
                 print()
                 self.socket.sendto(packet, (self.dst_ip, self.dst_port))
@@ -184,7 +185,7 @@ class Streamer:
                 time.sleep(0.1)
 
             # send chunk
-            self.indiv_send(chunk, False, False, False)
+            self.indiv_send(chunk, buffer=False, ack=False, fin=False)
 
     def recv(self) -> bytes:
         """Blocks (waits) if no data is ready to be read from the connection."""
@@ -206,29 +207,30 @@ class Streamer:
         """Cleans up. It should block (wait) until the Streamer is done with all
            the necessary ACKs and retransmissions"""
 
+        # Wait for all packets to be sent
         while self.send_buffer:
             time.sleep(0.1)
 
+        # Send FIN packet
         self.sending = True
         self.indiv_send(b'', False, False, True)
-
         while not self.fin:
             time.sleep(0.01)
-
         self.sending = False
 
+        # Sleep for 2 seconds
         time.sleep(2)
 
+        # Stop the listener and close socket
         self.closed = True
         self.socket.stoprecv()
 
         return
 
-    # Thread 2
     def listener(self):
         # last_num = 0
 
-        while not self.closed: # a later hint will explain self.closed
+        while not self.closed:
             try:
 
                 # Listen for packets
@@ -240,17 +242,20 @@ class Streamer:
                 ack = struct.unpack('!I??', header)[1]
                 fin = struct.unpack('!I??', header)[2]
 
-                # If an ACK is received, tell the object to break out of the
-                # while sleep loop
+                # If an ACK is received
                 if ack:
                     # self.ack = ack
+
                     if seq_num >= self.lowest_seq:
                         self.received_acks.append(seq_num)
 
                     print("")
-                    print("RECEIVED ACKS:",str(self.received_acks))
+                    print("RECEIVED ACKS:", str(self.received_acks))
+                    print("LOWEST SEQ NUM:", self.lowest_seq)
 
+                    # Acknowledge that
                     while self.lowest_seq in self.received_acks:
+                        print("Removing seq num", str(self.lowest_seq) + '...')
                         self.time = 0
                         del self.send_buffer[self.lowest_seq]
                         self.received_acks.remove(self.lowest_seq)
@@ -262,7 +267,7 @@ class Streamer:
                         print("received FIN")
 
                 # If the incoming packet's ACK flag is not set
-                if not ack:
+                else:
 
                     self.sending = False
                     hash = data[-16:]
@@ -294,29 +299,28 @@ class Streamer:
                     else:
                         print("\nAlready recieved:", seq_num)
 
-
                     # Send an ACK packet back
                     # self.ack = 1
-                    self.indiv_send(seq_num, False, True, fin)
+                    self.indiv_send(seq_num, buffer=False, ack=True, fin=fin)
 
             except Exception as e:
                 print("listener died!")
-                # print(e)
+                print(e)
 
-    # Thread 3
     def timer(self):
 
         while not self.closed:
 
             try:
                 while self.sending:
-                    while self.time <= 0.5:
+                    while self.time <= 0.15:
                         time.sleep(0.01)
                         self.time += 0.01
 
+                    print('\nTimeout!\n')
                     self.timeout = True
                     self.clear_buffer(self.send_buffer)
 
             except Exception as e:
-                print("listener timer died!")
-                # print(e)
+                print("timer died!")
+                print(e)
