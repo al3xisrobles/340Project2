@@ -20,33 +20,58 @@ class Streamer:
         self.dst_port = dst_port
         self.sequence_number = 0
         self.receive_buffer = {}
-        
-        #for the reciever
+
+        # Receive buffer
         self.received_packets = []
 
-        # for the sender
+        # Send buffer
         self.send_buffer = {}
+
+        # Earliest packet's sequence number that has been sent
+        # without receiving an ACK
         self.lowest_seq = 1
+
+        # Contains all ACKs received client-side. ACK gets deleted from
+        # here when there is a match with lowest seq, as you have received an
+        # ack for lowest seq. This ack gets removed from this list and lowest
+        # seq gets incremented by 1
         self.received_acks = []
-        self.timeout = False
+
+        # Time that has passed before first ACK is received
         self.time = 0
+
+        # Timeout has occurred, so start sending from the start of
+        # the send buffer
+        self.timeout = False
+
+        # Buffer currently being cleared (you are still sending packets from
+        # the buffer so you DO NOT want new packets being sent from test.py)
         self.clearing_buffer = False
+
+        # Currently sending a packet (for the timer thread)
         self.sending = False
 
+        # Connection is closed
         self.closed = False
+
+        # ACK packet
         self.ack = False
+
+        # FIN packet
         self.fin = False
 
+        # Thread 2 (listener)
         executer = ThreadPoolExecutor(max_workers = 1)
         executer.submit(self.listener)
 
+        # Thread 3 (timer)
         executer2 = ThreadPoolExecutor(max_workers = 1)
         executer2.submit(self.timer)
 
     def indiv_send(self, chunk: bytes, buffer: bool, ack: bool, fin: bool):
 
         # If we are receiving data from the buffer, just send it
-        # it is already packed up how we want it, 
+        # it is already packed up how we want it,
         # chunk is the whole packet, header and data and hash
         if buffer:
             print('\nSENDING CHUNK FROM BUFFER:', chunk[6:])
@@ -61,15 +86,15 @@ class Streamer:
         # we are receiving data from send function (so from test.py)
         # or we are receiving data from the listener, meaning its an ack
         else:
-            
+
             #chunk is seq number in the case of acks
             if ack:
-                print("Sending ACK SEQ NUM:", chunk)
+                print("sending ACK SEQ NUM:", chunk)
                 print()
                 header = struct.pack('!I??', chunk, ack, fin)
                 self.socket.sendto(header, (self.dst_ip, self.dst_port))
 
-            
+
             # ABOVE KEEP THE SAME
 
             # this is new data, from sent function, from test.py
@@ -102,12 +127,13 @@ class Streamer:
                 #         time.sleep(0.01)
                 #         t += 1
 
-                #     # if self.ack is true, then we received an ack and dont want 
+                #     # if self.ack is true, then we received an ack and dont want
                 #     # to send the packet again
                 #     sent = self.ack
 
-                print('\nSENDING CHUNK:', chunk)
+                print('SENDING CHUNK:', chunk)
                 print('WITH SEQ NUM:', self.sequence_number)
+                print()
                 self.socket.sendto(packet, (self.dst_ip, self.dst_port))
 
                 # add sent packet to send buffer
@@ -124,7 +150,6 @@ class Streamer:
         # clear the acks we have already received
         self.received_acks.clear()
 
-
         # for i in range(self.lowest_seq, self.sequence_number):
         #     self.indiv_send(self.send_buffer[i], True, False, False, hashlib.md5(self.send_buffer[i]).digest())
 
@@ -135,10 +160,7 @@ class Streamer:
             self.indiv_send(self.send_buffer[i], True, False, False)
             i += 1
 
-
         self.clearing_buffer = False
-
-
 
     def send(self, data_bytes: bytes) -> None:
         """Note that data_bytes can be larger than one packet."""
@@ -155,8 +177,6 @@ class Streamer:
         for i in range(0, len(data_bytes), MAX_PAYLOAD_LENGTH - len(header)):
             chunks.append(data_bytes[i:i + MAX_PAYLOAD_LENGTH - len(header)])
 
-
-
         # Send each chunk at a time
         for chunk in chunks:
 
@@ -165,7 +185,6 @@ class Streamer:
 
             # send chunk
             self.indiv_send(chunk, False, False, False)
-
 
     def recv(self) -> bytes:
         """Blocks (waits) if no data is ready to be read from the connection."""
@@ -180,24 +199,24 @@ class Streamer:
                 values = [value[1] for value in values]
                 data = b''.join(values)
                 self.receive_buffer.clear()
-                
+
                 return data
 
     def close(self) -> None:
         """Cleans up. It should block (wait) until the Streamer is done with all
            the necessary ACKs and retransmissions"""
-        
+
         while self.send_buffer:
             time.sleep(0.1)
-        
+
         self.sending = True
         self.indiv_send(b'', False, False, True)
 
         while not self.fin:
             time.sleep(0.01)
-        
+
         self.sending = False
-        
+
         time.sleep(2)
 
         self.closed = True
@@ -205,6 +224,7 @@ class Streamer:
 
         return
 
+    # Thread 2
     def listener(self):
         # last_num = 0
 
@@ -248,12 +268,12 @@ class Streamer:
                     hash = data[-16:]
 
                     payload = data[:-16]
-                    
+
                     # Checking hash
                     if hashlib.md5(payload).digest() != hash:
                         print("\nCORRUPT!")
                         continue
-                    
+
                     # if seq_num not in self.receive_buffer.keys() and seq_num != last_num:
 
                     if seq_num not in self.received_packets:
@@ -267,7 +287,7 @@ class Streamer:
                         # with each new packet received
                         self.sequence_number += 1
 
-                        print("\nRECEIVED A PACKET:")
+                        print("\nRECEIVED A PACKET:", payload[6:])
                         print('SEQ NUM:', seq_num)
                         # print('ACK:', self.ack)
                         print('RECEIVE BUFFER:', str(list(self.receive_buffer.keys())))
@@ -283,7 +303,7 @@ class Streamer:
                 print("listener died!")
                 # print(e)
 
-
+    # Thread 3
     def timer(self):
 
         while not self.closed:
@@ -293,7 +313,7 @@ class Streamer:
                     while self.time <= 0.5:
                         time.sleep(0.01)
                         self.time += 0.01
-                    
+
                     self.timeout = True
                     self.clear_buffer(self.send_buffer)
 
