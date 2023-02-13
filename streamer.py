@@ -187,10 +187,16 @@ class Streamer:
         """Cleans up. It should block (wait) until the Streamer is done with all
            the necessary ACKs and retransmissions"""
         
+        while self.send_buffer:
+            time.sleep(0.1)
+        
+        self.sending = True
         self.indiv_send(b'', False, False, True)
 
         while not self.fin:
             time.sleep(0.01)
+        
+        self.sending = False
         
         time.sleep(2)
 
@@ -218,8 +224,8 @@ class Streamer:
                 # while sleep loop
                 if ack:
                     # self.ack = ack
-
-                    self.received_acks.append(seq_num)
+                    if seq_num >= self.lowest_seq:
+                        self.received_acks.append(seq_num)
 
                     print("")
                     print("RECEIVED ACKS:",str(self.received_acks))
@@ -237,6 +243,8 @@ class Streamer:
 
                 # If the incoming packet's ACK flag is not set
                 if not ack:
+
+                    self.sending = False
                     hash = data[-16:]
 
                     payload = data[:-16]
