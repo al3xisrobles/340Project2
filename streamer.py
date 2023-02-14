@@ -2,10 +2,12 @@ import struct
 from concurrent.futures import ThreadPoolExecutor
 import time
 import hashlib
+import threading
 from threading import Lock
 
 # do not import anything else from loss_socket besides LossyUDP
 from lossy_socket import LossyUDP
+
 # do not import anything else from socket except INADDR_ANY
 from socket import INADDR_ANY
 
@@ -30,30 +32,31 @@ class Streamer:
 
         # Send buffer
         self.send_buffer = {}
+        self.timeout_time = 0.25
 
         # Earliest packet's sequence number that has been sent
         # without receiving an ACK
-        self.lowest_seq = 1
+        # self.lowest_seq = 1
 
         # Contains all ACKs received client-side. ACK gets deleted from
         # here when there is a match with lowest seq, as you have received an
         # ack for lowest seq. This ack gets removed from this list and lowest
         # seq gets incremented by 1
-        self.received_acks = []
+        # self.received_acks = []
 
         # Time that has passed before first ACK is received
-        self.time = 0
+        # self.time = 0
 
         # Timeout has occurred, so start sending from the start of
         # the send buffer
-        self.timeout = False
+        # self.timeout = False
 
         # Buffer currently being cleared (you are still sending packets from
         # the buffer so you DO NOT want new packets being sent from test.py)
-        self.clearing_buffer = False
+        # self.clearing_buffer = False
 
         # Currently sending a packet (for the timer thread)
-        self.sending = False
+        # self.sending = False
 
         # Connection is closed
         self.closed = False
@@ -65,80 +68,115 @@ class Streamer:
         self.fin = False
 
         # Thread 2 (listener)
-        executer = ThreadPoolExecutor(max_workers = 1)
-        executer.submit(self.listener)
+        self.executer = ThreadPoolExecutor(max_workers = 100)
+        self.executer.submit(self.listener)
 
         # Thread 3 (timer)
-        executer2 = ThreadPoolExecutor(max_workers = 1)
-        executer2.submit(self.timer)
+        # executer2 = ThreadPoolExecutor(max_workers = 1)
+        # executer2.submit(self.timer)
 
     def indiv_send(self, chunk: bytes, buffer: bool, ack: bool, fin: bool):
 
-        # If we are receiving data from the buffer, just send it
-        # it is already packed up how we want it,
-        # chunk is the whole packet, header and data and hash
-        if buffer:
-            seq_num = struct.unpack('!I??', chunk[:6])[0]
-            print('\nSENDING CHUNK FROM BUFFER')
-            print('WITH SEQ NUM:', seq_num)
-            self.socket.sendto(chunk, (self.dst_ip, self.dst_port))
+        # # If we are receiving data from the buffer, just send it
+        # # it is already packed up how we want it,
+        # # chunk is the whole packet, header and data and hash
+        # if buffer:
+        #     seq_num = struct.unpack('!I??', chunk[:6])[0]
+        #     print('\nSENDING CHUNK FROM BUFFER')
+        #     print('WITH SEQ NUM:', seq_num)
+        #     self.socket.sendto(chunk, (self.dst_ip, self.dst_port))
+
+        #     # add sent packet to send buffer
+        #     self.send_buffer[seq_num] = chunk
+
+        # # we are receiving data from send function (so from test.py)
+        # # or we are receiving data from the listener, meaning its an ack
+        # else:
+
+        #     #chunk is seq number in the case of acks
+        #     if ack:
+        #         print("sending ACK SEQ NUM:", chunk, "\n")
+        #         header = struct.pack('!I??', chunk, ack, fin)
+        #         self.socket.sendto(header, (self.dst_ip, self.dst_port))
+
+        #     # ABOVE KEEP THE SAME
+
+        #     # this is new data, from sent function, from test.py
+        #     else:
+        #         # sent = False
+        #         # self.ack = False
+
+        #         self.sequence_number += 1
+        #         header = struct.pack('!I??', self.sequence_number, ack, fin)
+
+        #         # create the hash for corruption
+        #         hash = hashlib.md5(header+chunk).digest()
+
+        #         packet = header + chunk + hash
+
+        #         ### STOP & WAIT ###
+        #         # while not sent:
+        #         #     t = 0
+        #         #     print('\nSENDING CHUNK:', chunk)
+        #         #     print('WITH SEQ NUM:', self.sequence_number)
+        #         #     print('AND ACK: 0')
+        #         #     print()
+        #         #     self.socket.sendto(packet, (self.dst_ip, self.dst_port))
+
+        #         #     # add sent packet to send buffer
+        #         #     self.send_buffer[self.sequence_number] = packet
+
+        #         #     # haven't recieved an ack and still within the waiting time
+        #         #     while not self.ack and t <= 25:
+        #         #         time.sleep(0.01)
+        #         #         t += 1
+
+        #         #     # if self.ack is true, then we received an ack and dont want
+        #         #     # to send the packet again
+        #         #     sent = self.ack
+
+        #         print('SENDING CHUNK')
+        #         print('WITH SEQ NUM:', self.sequence_number)
+        #         print()
+        #         self.socket.sendto(packet, (self.dst_ip, self.dst_port))
+
+        #         # add sent packet to send buffer
+        #         self.send_buffer[self.sequence_number] = packet
+
+
+
+        ## SELECTIVE REPEAT
+
+        #chunk is seq number in the case of acks
+        if ack:
+            print("sending ACK SEQ NUM:", chunk, "\n")
+            header = struct.pack('!I??', chunk, ack, fin)
+            self.socket.sendto(header, (self.dst_ip, self.dst_port))
+
+        # actual data
+        else:
+            self.sequence_number += 1
+            header = struct.pack('!I??', self.sequence_number, ack, fin)
+
+            # create the hash for corruption
+            hash = hashlib.md5(header+chunk).digest()
+
+            packet = header + chunk + hash
+            
+            # print('SENDING CHUNK')
+            # print('WITH SEQ NUM:', self.sequence_number)
+            # print()
+
+            # self.socket.sendto(packet, (self.dst_ip, self.dst_port))
 
             # add sent packet to send buffer
-            self.send_buffer[seq_num] = chunk
+            # I THINK WE CAN JUST MAKE THIS A LIST
+            self.send_buffer[self.sequence_number] = "test"
 
-        # we are receiving data from send function (so from test.py)
-        # or we are receiving data from the listener, meaning its an ack
-        else:
+            self.executer.submit(self.func_for_thread, packet)
+            # threading.Thread(target = self.func_for_thread, args=(packet,))
+            # self.send_buffer[self.sequence_number].run()
 
-            #chunk is seq number in the case of acks
-            if ack:
-                print("sending ACK SEQ NUM:", chunk, "\n")
-                header = struct.pack('!I??', chunk, ack, fin)
-                self.socket.sendto(header, (self.dst_ip, self.dst_port))
-
-            # ABOVE KEEP THE SAME
-
-            # this is new data, from sent function, from test.py
-            else:
-                # sent = False
-                # self.ack = False
-
-                self.sequence_number += 1
-                header = struct.pack('!I??', self.sequence_number, ack, fin)
-
-                # create the hash for corruption
-                hash = hashlib.md5(header+chunk).digest()
-
-                packet = header + chunk + hash
-
-                ### STOP & WAIT ###
-                # while not sent:
-                #     t = 0
-                #     print('\nSENDING CHUNK:', chunk)
-                #     print('WITH SEQ NUM:', self.sequence_number)
-                #     print('AND ACK: 0')
-                #     print()
-                #     self.socket.sendto(packet, (self.dst_ip, self.dst_port))
-
-                #     # add sent packet to send buffer
-                #     self.send_buffer[self.sequence_number] = packet
-
-                #     # haven't recieved an ack and still within the waiting time
-                #     while not self.ack and t <= 25:
-                #         time.sleep(0.01)
-                #         t += 1
-
-                #     # if self.ack is true, then we received an ack and dont want
-                #     # to send the packet again
-                #     sent = self.ack
-
-                print('SENDING CHUNK')
-                print('WITH SEQ NUM:', self.sequence_number)
-                print()
-                self.socket.sendto(packet, (self.dst_ip, self.dst_port))
-
-                # add sent packet to send buffer
-                self.send_buffer[self.sequence_number] = packet
 
     def clear_buffer(self, buffer: dict):
 
@@ -181,8 +219,8 @@ class Streamer:
         # Send each chunk at a time
         for chunk in chunks:
 
-            while self.clearing_buffer:
-                time.sleep(0.1)
+            # while self.clearing_buffer:
+            #     time.sleep(0.1)
 
             # send chunk
             self.indiv_send(chunk, buffer=False, ack=False, fin=False)
@@ -246,20 +284,23 @@ class Streamer:
                 if ack:
                     # self.ack = ack
 
-                    if seq_num >= self.lowest_seq:
-                        self.received_acks.append(seq_num)
+                    # if seq_num >= self.lowest_seq:
+                    #     self.received_acks.append(seq_num)
 
-                    print("")
-                    print("RECEIVED ACKS:", str(self.received_acks))
-                    print("LOWEST SEQ NUM:", self.lowest_seq)
+                    # print("")
+                    # print("RECEIVED ACKS:", str(self.received_acks))
+                    # print("LOWEST SEQ NUM:", self.lowest_seq)
 
                     # Acknowledge that
-                    while self.lowest_seq in self.received_acks:
-                        print("Removing seq num", str(self.lowest_seq) + '...')
-                        self.time = 0
-                        del self.send_buffer[self.lowest_seq]
-                        self.received_acks.remove(self.lowest_seq)
-                        self.lowest_seq += 1
+                    # while self.lowest_seq in self.received_acks:
+                    #     print("Removing seq num", str(self.lowest_seq) + '...')
+                    #     self.time = 0
+                    #     del self.send_buffer[self.lowest_seq]
+                    #     self.received_acks.remove(self.lowest_seq)
+                    #     self.lowest_seq += 1
+
+                    if seq_num in self.send_buffer.keys():
+                        del self.send_buffer[seq_num]
 
                     # if its an ack for the fin packet
                     if fin:
@@ -269,7 +310,7 @@ class Streamer:
                 # If the incoming packet's ACK flag is not set
                 else:
 
-                    self.sending = False
+                    # self.sending = False
                     hash = data[-16:]
 
                     payload = data[:-16]
@@ -307,20 +348,52 @@ class Streamer:
                 print("listener died!")
                 print(e)
 
-    def timer(self):
+    # def timer(self):
 
+    #     while not self.closed:
+
+    #         try:
+    #             while self.sending:
+    #                 while self.time <= 0.15:
+    #                     time.sleep(0.01)
+    #                     self.time += 0.01
+
+    #                 print('\nTimeout!\n')
+    #                 self.timeout = True
+    #                 self.clear_buffer(self.send_buffer)
+
+    #         except Exception as e:
+    #             print("timer died!")
+    #             print(e)
+
+
+    def func_for_thread(self, packet):
         while not self.closed:
-
             try:
-                while self.sending:
-                    while self.time <= 0.15:
+
+                #get seq num of the packet you want to send (for printing purposes)
+                seq_num = struct.unpack('!I??', packet[:6])[0]
+                acked = False
+
+                # while you have not received an ack
+                while not acked:
+                    t = 0
+                    print('\nSENDING CHUNK:', packet)
+                    print('WITH SEQ NUM:', seq_num)
+                    print()
+
+                    #send the packet
+                    self.socket.sendto(packet, (self.dst_ip, self.dst_port))
+
+                    #wait 0.25 seconds
+                    while t <= self.timeout_time:
                         time.sleep(0.01)
-                        self.time += 0.01
+                        t += 0.01
 
-                    print('\nTimeout!\n')
-                    self.timeout = True
-                    self.clear_buffer(self.send_buffer)
-
+                    # if seq num not in send buffer that means it has been acked
+                    if seq_num not in self.send_buffer.keys():
+                        acked = True
+                    
             except Exception as e:
-                print("timer died!")
+                print("thread for packet died!")
                 print(e)
